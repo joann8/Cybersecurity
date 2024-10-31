@@ -30,7 +30,7 @@ def print_img_info(img, path, DateTimeOriginal):
 def print_img_exif(img):
     """Print EXIF data for img"""
     # EXIF (Exchangeable Image File Format)
-    exif_data = img._getexif()
+    exif_data = img.getexif()
     DateTimeOriginal = False
     if exif_data:
         print("> EXIF data")
