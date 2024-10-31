@@ -22,26 +22,16 @@ class Scrapper:
         extension = url.lower().split('.')[-1]
         return extension in self.valid_extensions
 
-    def get_images(self, response, url):
+    def get_images(self, soup, url):
         """Recupere les img d'une page html a partir des balises img"""
-
-        # Recupere les balises img d'une page html
-        soup = BeautifulSoup(response.text, 'html.parser')
-        images = soup.find_all('img')
-
-        # A partir des balises img, enregistre les urls absolus
+        images = soup.find_all("img", src=True)  # que les img qui ont une src
+        # src pour les sites statiques (data-* pour les non statiques)
         for img in images:
-            img_url = img.get('src')
-            print(f"response = {img_url}")
-
-            # src pour les sites statiques (data-* pour les non statiques)
-            if img_url:
-                # Convertir les URLs relatives (/images/pics.jpg) -> absolues
-                img_url = urljoin(url, img_url)
-                if img_url not in self.images_urls \
-                   and self.is_valid_image(img_url):
-                    print("here")
-                    self.download_img(img_url)
+            # Convertir les URLs relatives (/images/pics.jpg) -> absolues
+            img_url = urljoin(url, img["src"])
+            if img_url not in self.images_urls and \
+               self.is_valid_image(img_url):
+                self.download_img(img_url)
 
     def download_img(self, img_url):
         """Download images and save them in a folder"""
@@ -62,33 +52,25 @@ class Scrapper:
 
         # Sauvegarder l'image
         img_response = requests.get(img_url, stream=True)
-        print(f"img_response = {img_response.status_code}")
-
         if img_response.status_code == 200:
             with open(img_path, 'wb') as file:
                 for chunk in img_response.iter_content(1024):
                     file.write(chunk)
             self.images_urls.add(img_url)
 
-    def get_links(self, response, url, current_level):
+    def get_links(self, soup, url, current_level):
         """Explore all links from a page"""
 
-        # Recupere les balises a href=True d'une page html (balises liens)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Recupere les balises a href=True (hyperlink) d'une page html
         links = soup.find_all('a', href=True)
-        # Trouver toutes les balises <a> avec href
-
         for link in links:
             full_url = urljoin(url, link['href'])
             # Convertir les liens relatifs en liens absolus
             parsed_link = urlparse(full_url)
-            print(">here")
-            print(f"{self.url_main} | {parsed_link.netloc}")
-            print(f"{parsed_link}")
-
-            if self.url_main == parsed_link.netloc or 'www.' + self.url_main == parsed_link.netloc:
+            if self.url_main == parsed_link.netloc or \
+               'www.' + self.url_main == parsed_link.netloc:
                 if full_url not in self.visited_url:
-                    self.scrap_page(full_url, current_level + 1)               
+                    self.scrap_page(full_url, current_level + 1)
 
     def scrap_page(self, url, current_level):
         """Scrape the url given"""
@@ -96,41 +78,31 @@ class Scrapper:
         response = requests.get(url, timeout=5)
         # Timeout : Limite le temps d'attente de la réponse pour éviter
         # que le programme reste bloqué si le serveur ne répond pas.
-        print(f"response = {response.status_code}")
 
         if response.status_code == 200:
-            self.get_images(response, url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            self.get_images(soup, url)
             self.visited_url.add(url)
             if current_level + 1 <= self.level_max:
-                self.get_links(response, url, current_level)
-
-
-import time
+                self.get_links(soup, url, current_level)
 
 
 def main():
     try:
-        start_time = time.time()
-        parser = argparse.ArgumentParser()
-        parser.add_argument('-r', '--recursive', action='store_true')
-        parser.add_argument('-l', '--level', type=int, choices=[1, 2, 3, 4, 5], default=5)
-        parser.add_argument('-p', '--path', type=str, default='./data/')
-        parser.add_argument('url', type=str)
+        parser = argparse.ArgumentParser(description="Spider")
+        parser.add_argument('-r', '--recursive', action='store_true',
+                            help="recursive")
+        parser.add_argument('-l', '--level', type=int, choices=[1, 2, 3, 4, 5],
+                            default=5, help="level (int between 1 and 5)")
+        parser.add_argument('-p', '--path', type=str, default='./data/',
+                            help="path to store the images")
+        parser.add_argument('url', type=str, help="url to scrap")
         # Analyser les arguments
         args = parser.parse_args()
-        # if args.level < 1 or args.level > 5:
-        #     raise ValueError("Level should be an int betzen 1 and 5")
-        print(f"level max = {args.level}")
-
         scrapping = Scrapper(args.url, args.recursive, args.level, args.path)
         scrapping.scrap_page(args.url, 1)
-        print(f"Images prises = {len(scrapping.images_urls)}")
-        print(f"Url visite = {len(scrapping.visited_url)}")
-
-        end_time = time.time()
-        execution_time = end_time - start_time
-
-        print(f"Temps d'exécution : {execution_time:.4f} secondes")
+        # print(f"Images prises = {len(scrapping.images_urls)}")
+        # print(f"Url visite = {len(scrapping.visited_url)}")
 
     except Exception as e:
 
