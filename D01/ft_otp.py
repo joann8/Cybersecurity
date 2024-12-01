@@ -1,26 +1,57 @@
-import argparse
-import re
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import padding
-import os
+import argparse                          # parsing arguments
+import re                                # expression matching (check 64hex)
+from cryptography.fernet import Fernet   # chiffrement method
+import time                              # timestamp
+import struct                            # implementation RFC 4226 --> 8 octets big endian
+import hmac                              # manipulation des Hash Msg Athentification code
+import hashlib                           # manipulation des hash
+import binascii                          # convertir cipher en bytes
+import os                                # creation/enregisterment des fichiers
+import subprocess                        # comparaison avec oathtool
+import pyotp                             # comparaison avec pyotp
+import base64                            # conversion 64-32 pour pyotp
+import qrcode                            # bonus QR code
+
+# __________ GENERATION et CONSREVATION DE LA CLEF / LE 'SECRET' PARTAGE __________
+
+KEY_FILE = "fernet.key"
+
+def load_key_from_file():
+    """Fonction pour charger la clé depuis un fichier"""
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, "rb") as file:
+            return file.read()
+    return None
+
+def load_fernet_key():
+    """Fonction pour générer ou recupérer la clé depuis un fichier"""
+    fernet_key = load_key_from_file()
+    if fernet_key is None:
+        fernet_key = Fernet.generate_key()
+        with open(KEY_FILE, "wb") as file:
+            file.write(fernet_key)
+    return fernet_key
 
 
-# Vecteur d'initialisation (IV) 
-# Indispensable au chiffrage / dechiffrage
-# pour l"exemple on le prend un en dur mais normalement aléatoire et stocké qq part
-# (iv = os.urandom(16)) aléatoire de 16 octets
-iv = b'iDh;X\x8a=m\xee\xb2y\x10\xc7(\x02\xf0'
+# __________ GESTION DES ERREURS PERSONNALISEES __________
 
-# Clé de chifferement AES (Advanced Encryption Standard)
-# Indispensable au chiffrage / dechiffrage
-# pour l"exemple on le  prend un en dur mais normalement aléatoire et stocké qq part
-aes_key = b'[\xfe\x02\x05\x8e\x8fk\xbe\x1e\xa2\xd1\xc5o\xa0\xef\xea\xcb\xca\xa7y`\x87\x1c\xc06\x17\x99U\x0b5\xcd\x9a'
+class ErrorHex(Exception):
+    """Exception personnalisée Hex"""
+    def __init__(self, message="/ft_otp: error: key must be 64 hexadecimal characters."):
+        self.message = message
+        super().__init__(self.message)
+
+class ErrorFernet(Exception):
+    """Exception personnalisée Fernet"""
+    def __init__(self, message="Mutual secret lost (no fernet.key file)"):
+        self.message = message
+        super().__init__(self.message)
 
 
 # _______ First program _______
 # -g: The program receives as argument a hexadecimal key of at least 64 characters.
 # The program stores this key safely in a file called ft_otp.key, which is encrypted.
+
 
 def is_valid_hexadecimal_64(key_str: str):
     """Check hexadecimal key format"""
@@ -28,33 +59,24 @@ def is_valid_hexadecimal_64(key_str: str):
     return bool(re.fullmatch(pattern, key_str))
 
 
-def crypt_the_key(key_bytes: str):
-    """Crypt the key : AES (Advanced Encryption Standard) en mode CBC (Cipher block chaining)"""
-
-    # Créer un objet de chiffrement AES 
-    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend())
-
-    # Padding : Le mode CBC exige que le texte clair soit un multiple de la taille du bloc (128 bits = 16 octets).
-    # Le padding est ajouté pour atteindre cette longueur à l'aide d'un padder
-    padder = padding.PKCS7(128).padder()
-    padded_data = padder.update(key_bytes) + padder.finalize()
-
-    # Chiffrer les données
-    encryptor = cipher.encryptor()
-    encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
-
+def crypt_the_key(key_str: str):
+    """Crypt the key"""
+    fernet_key = load_fernet_key()
+    cipher = Fernet(fernet_key)
+    key_bytes = key_str.encode()  # Nécessaire pour la fonction cypher
+    encrypted_data = cipher.encrypt(key_bytes)
     return encrypted_data
+
 
 def generate_encrypted_key_file(file):
     """Generate encrypted key"""
     key_str = file.read()
     if not is_valid_hexadecimal_64(key_str):
-        raise TypeError("not an Hexadecimal 64 key")
-    key_bytes = bytes.fromhex(key_str)  # Convertir la clé hexadécimale en bytes
-    encrypted_data = crypt_the_key(key_bytes)
+        raise ErrorHex()
+    encrypted_data = crypt_the_key(key_str)
     with open("ft_otp.key", "wb") as key_file:
-        key_file.write(encrypted_data) 
-        print("Clé chiffrée:", encrypted_data)
+        key_file.write(encrypted_data)
+        print("Key was successfully saved in ft_otp.key.")
     return
 
                    
@@ -63,33 +85,58 @@ def generate_encrypted_key_file(file):
 # as argument and prints it on the standard output.
 
 
-def decrypt_the_key(encrypted_data: str):
-    """Decrypt the key : AES (Advanced Encryption Standard) en mode CBC (Cipher block chaining)"""
-
-    # Créer un objet de déchiffrement AES en mode CBC (avec le meme aes_key et iv)
-    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend())
-
-    # Déchiffrer les données
-    decryptor = cipher.decryptor()
-    decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
-
-    # Enlever le padding
-    unpadder = padding.PKCS7(128).unpadder()
-    unpadded_data = unpadder.update(decrypted_data) + unpadder.finalize()
-
-    # La clé déchiffrée
-    print("Clé déchiffrée:", unpadded_data.hex())
-    return unpadded_data
-
-def generate_totp(file):
-    """Generate TOTP key"""
-
+def decrypt_the_key(file):
+    """Decrypt the key"""
     encrypted_data = file.read()
-    key = decrypt_the_key(encrypted_data)
-    
+    fernet_key = load_key_from_file()
+    if fernet_key is None:
+        raise ErrorFernet()
+    cipher = Fernet(fernet_key)
+    decrypted_key = cipher.decrypt(encrypted_data)
+    decrypted_key_bytes = binascii.unhexlify(decrypted_key)
+    return decrypted_key_bytes
 
+
+def generate_my_totp(decrypted_key_bytes, time_step=30, digits=6, algorithm=hashlib.sha512):
+    """Generate my TOTP code with HOTP protocol RFC 4226"""
+    timestamp = int(time.time())
+    counter = timestamp // time_step 
+    counter_bytes = struct.pack(">Q", counter)      # Counter en 8 octets (big-endian)
+    hmac_hash = hmac.new(decrypted_key_bytes, counter_bytes, algorithm).digest()    # Calculer le HMAC avec SHA-512
+    # Troncation dynamique
+    offset = hmac_hash[-1] & 0x0F
+    truncated_hash = hmac_hash[offset:offset + 4]
+    code = struct.unpack(">I", truncated_hash)[0] & 0x7FFFFFFF  # Retirer le bit de signe
+    final_code = str(code % (10 ** digits)).zfill(digits)  # pour 6 chiffres 
+    return final_code
+
+
+# ________ Bonnus & testing _________
+
+def generate_py_totp(decrypted_key_bytes, algorithm=hashlib.sha512):
+    """Comparer l'OTP généré avec python"""
+    py_totp = pyotp.totp.TOTP(base64.b32encode(decrypted_key_bytes), digest=algorithm)
+    py_code = py_totp.now()  # divisé par 30 par défault
+    return py_code
+
+ 
+def generate_oathtool_totp(decrypted_key_bytes):
+    """Comparer l'OTP généré avec oathtool"""   
+    oathtool_output = subprocess.check_output(f"oathtool --totp=sha512 {decrypted_key_bytes.hex()}", shell=True).decode().strip() 
+    return oathtool_output
+
+
+def generate_qr(decrypted_key_bytes):
+    uri = pyotp.TOTP(base64.b32encode(decrypted_key_bytes), digest=hashlib.sha512).provisioning_uri(name="jacher", issuer_name="jacher_ft_otp")
+    uri2 = pyotp.totp.TOTP(base64.b32encode(decrypted_key_bytes)).provisioning_uri(name="jacher2", issuer_name="jacher_ft_otp2")
+
+    qrcode.make(uri).save("QR_ft_otp.png")
+    qrcode.make(uri2).save("QR_ft_otp2.png")
+
+    open("QR_ft_otp.png")
 
 # _______ Main _______
+
 
 def main():
     try:
@@ -97,15 +144,28 @@ def main():
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument("-g", dest="g_key_file", type=argparse.FileType("r"), help="Encrypt a key")
         group.add_argument("-k", dest="k_key_file", type=argparse.FileType("rb"), help="Generate a temporary paswword given a key")
-
         args = parser.parse_args()
-        if args.g_key_file:
+
+        if args.g_key_file:  # First program
             generate_encrypted_key_file(args.g_key_file)
-        if args.k_key_file:
-            generate_totp(args.k_key_file)
+
+        if args.k_key_file:  # Second program
+            decrypted_key_bytes = decrypt_the_key(args.k_key_file)
+            
+            my_code = generate_my_totp(decrypted_key_bytes)
+            print(f'{"--> Mycode    :":<12} {my_code}')
+
+            # comparaison avec d'autres outils 
+            py_code = generate_py_totp(decrypted_key_bytes)          
+            print(f'{"--> PyOTP     :":<12} {py_code}')
+            oathtool_code= generate_oathtool_totp(decrypted_key_bytes)
+            print(f'{"--> Oathtool  :":<12} {oathtool_code}')
+
+            # Bonus QR code
+            generate_qr(decrypted_key_bytes)
 
     except Exception as e:
-        print(type(e).__name__ + ":", e)
+        print(e)
 
 
 if __name__ == "__main__":
