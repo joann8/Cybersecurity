@@ -12,7 +12,7 @@ import pyotp                             # comparaison avec pyotp
 import base64                            # conversion 64-32 pour pyotp
 import qrcode                            # bonus QR code
 
-# __________ GENERATION et CONSREVATION DE LA CLEF / LE 'SECRET' PARTAGE __________
+# __________ GENERATION et CONSREVATION DE LA CLEF ENCRYPTAGE __________
 
 KEY_FILE = "fernet.key"
 
@@ -83,6 +83,7 @@ def generate_encrypted_key_file(file):
 # _______ Second program _______
 # -k: The program generates a new temporary password based on the key given
 # as argument and prints it on the standard output.
+# on recupere notre secret et on s'identifie via le hash
 
 
 def decrypt_the_key(file):
@@ -115,25 +116,14 @@ def generate_my_totp(decrypted_key_bytes, time_step=30, digits=6, algorithm=hash
 
 def generate_py_totp(decrypted_key_bytes, algorithm=hashlib.sha512):
     """Comparer l'OTP généré avec python"""
-    py_totp = pyotp.totp.TOTP(base64.b32encode(decrypted_key_bytes), digest=algorithm)
+    py_totp = pyotp.TOTP(base64.b32encode(decrypted_key_bytes), digest=algorithm)
     py_code = py_totp.now()  # divisé par 30 par défault
     return py_code
-
- 
-def generate_oathtool_totp(decrypted_key_bytes):
-    """Comparer l'OTP généré avec oathtool"""   
-    oathtool_output = subprocess.check_output(f"oathtool --totp=sha512 {decrypted_key_bytes.hex()}", shell=True).decode().strip() 
-    return oathtool_output
 
 
 def generate_qr(decrypted_key_bytes):
     uri = pyotp.TOTP(base64.b32encode(decrypted_key_bytes), digest=hashlib.sha512).provisioning_uri(name="jacher", issuer_name="jacher_ft_otp")
-    uri2 = pyotp.totp.TOTP(base64.b32encode(decrypted_key_bytes)).provisioning_uri(name="jacher2", issuer_name="jacher_ft_otp2")
-
     qrcode.make(uri).save("QR_ft_otp.png")
-    qrcode.make(uri2).save("QR_ft_otp2.png")
-
-    open("QR_ft_otp.png")
 
 # _______ Main _______
 
@@ -155,12 +145,10 @@ def main():
             my_code = generate_my_totp(decrypted_key_bytes)
             print(f'{"--> Mycode    :":<12} {my_code}')
 
-            # comparaison avec d'autres outils 
+            # comparaison avec un autre outil 
             py_code = generate_py_totp(decrypted_key_bytes)          
             print(f'{"--> PyOTP     :":<12} {py_code}')
-            oathtool_code= generate_oathtool_totp(decrypted_key_bytes)
-            print(f'{"--> Oathtool  :":<12} {oathtool_code}')
-
+            
             # Bonus QR code
             generate_qr(decrypted_key_bytes)
 
